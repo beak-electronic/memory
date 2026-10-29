@@ -82,7 +82,7 @@ async function runCore(browserType, label, base) {
     };
   });
   // SND_SRC is inside IIFE — check via played after actions instead
-  ok(meta.ver === 'V1.04', `${label}: version V1.04 (${meta.ver})`);
+  ok(meta.ver === 'V1.06', `${label}: version V1.06 (${meta.ver})`);
   ok(meta.title === 'BEAK Memory', `${label}: title BEAK Memory (${meta.title})`);
   ok(!meta.kidsBtn, `${label}: no kids menu button`);
   ok(meta.levels === 10 && meta.first === 'level01', `${label}: 10 levels starting level01`);
@@ -230,6 +230,118 @@ async function runCore(browserType, label, base) {
   const hs = await page.evaluate(() => MEMORY.HS_ON);
   ok(hs === false, `${label}: supabase off`);
 
+  // V1.06 music: unlock → titel on start, memory in level, toggle, ducking, loop, flip SFX
+  await page.evaluate(() => { MEMORY.G.screen = 'start'; });
+  await page.mouse.click(200, 200); // user gesture / unlock
+  await page.evaluate(async () => {
+    try { if (MEMORY.SND.ctx && MEMORY.SND.ctx.state !== 'running') await MEMORY.SND.ctx.resume(); } catch (e) {}
+    MEMORY.musSync();
+  });
+  // Wait for real decode (Chromium) or inject silent loop buffers (WebKit headless has no mp3 decode)
+  let ready = null;
+  for (let i = 0; i < 25; i++) {
+    await page.waitForTimeout(150);
+    ready = await page.evaluate(() => ({
+      hasTitel: !!MEMORY.MUS.buf.titel,
+      hasMem: !!MEMORY.MUS.buf.memory,
+      decoded: MEMORY.MUS.decoded,
+      unlocked: MEMORY.SND.unlocked,
+      ctx: MEMORY.SND.ctx && MEMORY.SND.ctx.state
+    }));
+    if (ready.hasTitel && ready.hasMem) break;
+  }
+  if (!ready.hasTitel || !ready.hasMem) {
+    await page.evaluate(() => {
+      const ctx = MEMORY.SND.ctx;
+      if (!ctx) return;
+      const mk = () => {
+        const b = ctx.createBuffer(1, Math.max(1, (ctx.sampleRate * 2) | 0), ctx.sampleRate);
+        return b;
+      };
+      MEMORY.MUS.buf.titel = mk();
+      MEMORY.MUS.buf.memory = mk();
+      MEMORY.MUS.decoded = 2;
+      MEMORY.SND._decodeStarted = true;
+    });
+  }
+  await page.evaluate(() => { MEMORY.G.screen = 'start'; MEMORY.musSync(); });
+  await page.waitForTimeout(100);
+  const musStart = await page.evaluate(() => {
+    MEMORY.musSync();
+    return {
+      track: MEMORY.MUS.track,
+      loop: !!(MEMORY.MUS.src && MEMORY.MUS.src.loop),
+      on: MEMORY.MUS.on,
+      paused: MEMORY.MUS.paused,
+      hasSrc: !!MEMORY.MUS.src,
+      ctx: MEMORY.SND.ctx && MEMORY.SND.ctx.state
+    };
+  });
+  // track must be titel; loop/src requires running AudioContext (Chromium). WebKit headless often suspended.
+  const startOk = musStart.on && musStart.track === 'titel' && !musStart.paused &&
+    (musStart.loop || musStart.ctx === 'suspended');
+  ok(startOk, `${label}: start music titel looping (${JSON.stringify(musStart)})`);
+
+  await page.evaluate(() => MEMORY.startLevel(0));
+  await page.waitForTimeout(200);
+  const musGame = await page.evaluate(() => {
+    MEMORY.musSync();
+    return { track: MEMORY.MUS.track, loop: !!(MEMORY.MUS.src && MEMORY.MUS.src.loop), ctx: MEMORY.SND.ctx && MEMORY.SND.ctx.state };
+  });
+  ok(musGame.track === 'memory' && (musGame.loop || musGame.ctx === 'suspended'), `${label}: level music memory looping (${JSON.stringify(musGame)})`);
+
+  // Ducking while Ava plays
+  const duck = await page.evaluate(() => {
+    MEMORY.MUS.duckUntil = 0;
+    MEMORY.musSync();
+    MEMORY.playSnd('prima');
+    return { ducked: MEMORY.MUS.duckUntil > performance.now(), duckVol: MEMORY.MUS.duckVol, base: MEMORY.MUS.baseVol };
+  });
+  ok(duck.ducked && duck.duckVol < duck.base, `${label}: music ducks under Ava (${JSON.stringify(duck)})`);
+
+  // Toggle off via musToggle — effects still work
+  const tog = await page.evaluate(() => {
+    const n0 = MEMORY.SND.flipN;
+    MEMORY.musToggle();
+    const off = { on: MEMORY.MUS.on, src: !!MEMORY.MUS.src };
+    MEMORY.playFlipSnd();
+    MEMORY.playSnd('nee');
+    return { off, flipN: MEMORY.SND.flipN, n0, played: MEMORY.SND.played.slice(-2) };
+  });
+  ok(!tog.off.on && tog.flipN > tog.n0 && tog.played.includes('nee'), `${label}: music off keeps SFX (${JSON.stringify(tog)})`);
+  await page.evaluate(() => MEMORY.musToggle()); // back on
+  await page.waitForTimeout(80);
+  ok((await page.evaluate(() => MEMORY.MUS.on)), `${label}: music toggled back on`);
+
+  // Pause screen pauses music
+  await page.evaluate(() => { MEMORY.G.screen = 'pause'; MEMORY.G.running = false; MEMORY.musSync(); });
+  const paused = await page.evaluate(() => ({ paused: MEMORY.MUS.paused, src: !!MEMORY.MUS.src }));
+  ok(paused.paused && !paused.src, `${label}: pause stops music source (${JSON.stringify(paused)})`);
+  await page.evaluate(async () => {
+    MEMORY.G.screen = 'game'; MEMORY.G.running = true;
+    try { if (MEMORY.SND.ctx && MEMORY.SND.ctx.state !== 'running') await MEMORY.SND.ctx.resume(); } catch (e) {}
+    MEMORY.musSync();
+  });
+  let resumed = null;
+  for (let i = 0; i < 15; i++) {
+    await page.waitForTimeout(100);
+    resumed = await page.evaluate(() => {
+      MEMORY.musSync();
+      return { paused: MEMORY.MUS.paused, track: MEMORY.MUS.track, src: !!MEMORY.MUS.src, ctx: MEMORY.SND.ctx && MEMORY.SND.ctx.state };
+    });
+    if (!resumed.paused && resumed.track === 'memory' && (resumed.src || resumed.ctx === 'suspended')) break;
+  }
+  ok(!resumed.paused && resumed.track === 'memory' && (resumed.src || resumed.ctx === 'suspended'), `${label}: resume music (${JSON.stringify(resumed)})`);
+
+  // Flip sound on beginFlip
+  const flips = await page.evaluate(() => {
+    MEMORY.startLevel(0);
+    const n0 = MEMORY.SND.flipN;
+    MEMORY.beginFlip(0, true);
+    return MEMORY.SND.flipN - n0;
+  });
+  ok(flips >= 1, `${label}: flip SFX on beginFlip (${flips})`);
+
   await browser.close();
 }
 
@@ -369,6 +481,122 @@ async function runV103Shots(base) {
   try { fs.unlinkSync(path.join(MOCK, 'v103-desktop-start-placeholder.png')); } catch (e) {}
 }
 
+
+async function runV105Shots(base) {
+  // iPhone 390x844 @ DPR 3 — Header + level 03 matched pair (wie Daniels Live-Shot)
+  const browser = await pw.chromium.launch({ headless: true });
+  const ctx = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    deviceScaleFactor: 3,
+    hasTouch: true,
+    isMobile: true
+  });
+  const page = await ctx.newPage();
+  await page.goto(base + '/index.html');
+  await page.waitForTimeout(600);
+
+  const dprInfo = await page.evaluate(() => {
+    const v = MEMORY.view();
+    return { dpr: v.dpr, winDpr: window.devicePixelRatio, statusBar: document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]').content, theme: document.querySelector('meta[name="theme-color"]').content, strip: !!document.querySelector('.ios-pwa-status-strip') };
+  });
+  ok(dprInfo.dpr >= 2.9, `v105: canvas DPR ~3 (${JSON.stringify(dprInfo)})`);
+  ok(dprInfo.statusBar === 'default', `v105: status-bar-style default (${dprInfo.statusBar})`);
+  ok(dprInfo.strip, `v105: ios-pwa-status-strip present`);
+
+  // level 03 = index 2, one matched pair (diode-like look)
+  await page.evaluate(() => {
+    MEMORY.startLevel(2);
+  });
+  await page.waitForTimeout(250);
+  await page.evaluate(() => {
+    // match first pair: find two cards with same pair id
+    const cards = MEMORY.G.cards;
+    const a = 0;
+    let b = -1;
+    for (let i = 1; i < cards.length; i++) if (cards[i].pair === cards[a].pair) { b = i; break; }
+    cards.forEach(c => { c.flipped = false; c.matched = false; c.anim = null; });
+    MEMORY.G.flipped = []; MEMORY.G.lock = false; MEMORY.G.matched = 0; MEMORY.G.moves = 1;
+    cards[a].flipped = true; cards[a].matched = true;
+    cards[b].flipped = true; cards[b].matched = true;
+    MEMORY.G.matched = 1;
+  });
+  await page.waitForTimeout(80);
+  // force a redraw tick
+  await page.evaluate(() => { if (typeof MEMORY.G !== 'undefined') { /* draw via rAF */ } });
+  await page.waitForTimeout(120);
+
+  const full = path.join(MOCK, 'v105-iphone-level03-matched.png');
+  await page.screenshot({ path: full });
+
+  // Header crop (top ~110 CSS px → 330 device px @3)
+  await page.screenshot({ path: path.join(MOCK, 'v105-iphone-header.png'), clip: { x: 0, y: 0, width: 390, height: 110 } });
+  // Zoomed header (same clip, we'll also save a 2x logical zoom via clip of logo area)
+  await page.screenshot({ path: path.join(MOCK, 'v105-iphone-header-zoom.png'), clip: { x: 40, y: 20, width: 310, height: 70 } });
+
+  // Matched card zoom: get first matched card rect in client coords
+  const clipCard = await page.evaluate(() => {
+    const cards = MEMORY.G.cards;
+    let idx = cards.findIndex(c => c.matched);
+    if (idx < 0) idx = 0;
+    const r = MEMORY.cardRect(idx);
+    const tl = MEMORY.toClient(r.x - 8, r.y - 8);
+    const br = MEMORY.toClient(r.x + r.w + 8, r.y + r.h + 8);
+    return { x: Math.max(0, tl.x), y: Math.max(0, tl.y), width: Math.min(390, br.x) - Math.max(0, tl.x), height: Math.min(844, br.y) - Math.max(0, tl.y), idx };
+  });
+  await page.screenshot({ path: path.join(MOCK, 'v105-iphone-matched-card-zoom.png'), clip: clipCard });
+
+  // Also webkit DPR3 header + level03
+  await browser.close();
+
+  const wb = await pw.webkit.launch({ headless: true });
+  const wctx = await wb.newContext({
+    viewport: { width: 390, height: 844 },
+    deviceScaleFactor: 3,
+    hasTouch: true,
+    isMobile: true
+  });
+  const wp = await wctx.newPage();
+  await wp.goto(base + '/index.html');
+  await wp.waitForTimeout(600);
+  await wp.evaluate(() => MEMORY.startLevel(2));
+  await wp.waitForTimeout(200);
+  await wp.evaluate(() => {
+    const cards = MEMORY.G.cards;
+    const a = 0; let b = -1;
+    for (let i = 1; i < cards.length; i++) if (cards[i].pair === cards[a].pair) { b = i; break; }
+    cards.forEach(c => { c.flipped = false; c.matched = false; c.anim = null; });
+    MEMORY.G.flipped = []; MEMORY.G.lock = false; MEMORY.G.matched = 0;
+    cards[a].flipped = true; cards[a].matched = true;
+    cards[b].flipped = true; cards[b].matched = true;
+    MEMORY.G.matched = 1;
+  });
+  await wp.waitForTimeout(150);
+  await wp.screenshot({ path: path.join(MOCK, 'v105-webkit-level03-matched.png') });
+  await wp.screenshot({ path: path.join(MOCK, 'v105-webkit-header.png'), clip: { x: 0, y: 0, width: 390, height: 110 } });
+  await wb.close();
+  console.log('v105 screenshots written');
+}
+
+
+async function runV106Shots(base) {
+  const browser = await pw.chromium.launch({ headless: true });
+  const ctx = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    deviceScaleFactor: 3,
+    hasTouch: true,
+    isMobile: true
+  });
+  const page = await ctx.newPage();
+  await page.goto(base + '/index.html');
+  await page.waitForTimeout(500);
+  await page.screenshot({ path: path.join(MOCK, 'v106-iphone-start.png') });
+  await page.evaluate(() => MEMORY.startLevel(0));
+  await page.waitForTimeout(250);
+  await page.screenshot({ path: path.join(MOCK, 'v106-iphone-level01.png') });
+  await browser.close();
+  console.log('v106 screenshots written');
+}
+
 (async () => {
   const { execSync } = require('child_process');
   execSync('python3 build.py --pages', { cwd: ROOT, stdio: 'inherit' });
@@ -381,7 +609,8 @@ async function runV103Shots(base) {
   await runCore(pw.webkit, 'webkit', base);
   await runIphone(pw.chromium, 'chromium', base);
   await runIphone(pw.webkit, 'webkit', base);
-  await runV103Shots(base);
+  await runV105Shots(base);
+  await runV106Shots(base);
 
   srv.close();
   console.log(fails ? `\n${fails} FAILED` : '\nALL PASSED');

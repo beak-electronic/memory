@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
-"""Build single-file index.html (fonts + Ava audio inlined)."""
+"""Build single-file index.html (fonts + Ava audio + music inlined)."""
 import base64, json, os, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 B = os.path.join(HERE, "build"); S = os.path.join(HERE, "src")
 b64 = lambda p: base64.b64encode(open(os.path.join(B, p), "rb").read()).decode()
+b64a = lambda p: base64.b64encode(open(p, "rb").read()).decode()
 css = open(os.path.join(S, "style.css"), encoding="utf-8").read()
 css = css.replace("__N300I__", b64("n300i.ttf")).replace("__N600__", b64("n600.ttf")).replace("__AEONIS__", b64("aeonis.ttf"))
 js = open(os.path.join(S, "game.js"), encoding="utf-8").read()
 SOUNDS = ["los-gehts", "prima", "nee"]
 AUD = os.path.join(HERE, "audio")
-snd = {n: base64.b64encode(open(os.path.join(AUD, n + ".mp3"), "rb").read()).decode() for n in SOUNDS}
+snd = {n: b64a(os.path.join(AUD, n + ".mp3")) for n in SOUNDS}
 js = js.replace("__SOUNDS__", json.dumps(snd, separators=(",", ":")))
+mus = {
+  "titel": b64a(os.path.join(AUD, "mus-titel.mp3")),
+  "memory": b64a(os.path.join(AUD, "mus-memory.mp3")),
+}
+js = js.replace("__MUSIC__", json.dumps(mus, separators=(",", ":")))
 PAGES = "--pages" in sys.argv
 head = ""
 if PAGES:

@@ -1,13 +1,15 @@
 (function(){
 "use strict";
-var VERSION = "V1.04";
+var VERSION = "V1.06";
 var PINK = "#dd007a", WHITE = "#ffffff", GREY = "#505050", LIGHT = "#b4b4b4", CARD_BACK = "#dd007a";
 var CREDIT = "Soundeffekte: Ava (2)";
 var FLIP_DUR = 0.40; // s, 3D-Kartendrehung
 var SND_SRC = __SOUNDS__;
+var MUS_SRC = __MUSIC__;
 var LS_BEST = "bestueckungs-memory.v1.best";
 var LS_TOP = "bestueckungs-memory.v1.top5";
 var LS_LEVEL = "bestueckungs-memory.v1.level";
+var LS_MUSIC = "bestueckungs-memory.v1.music";
 
 /* =====================================================================
  * MOTIFS — zentrale, austauschbare Motivliste
@@ -157,8 +159,9 @@ function readInsets(){
 }
 function resize(){
   var cw=window.innerWidth, ch=window.innerHeight;
-  var dpr=Math.min(window.devicePixelRatio||1, TOUCH_DEV?2:3);
-  var budget=TOUCH_DEV?4.5e6:9e6;
+  // Retina/iPhone: volles devicePixelRatio (bis 3) — Cap 2 machte Logo/Pause unscharf
+  var dpr=Math.min(window.devicePixelRatio||1, 3);
+  var budget=TOUCH_DEV?8e6:12e6;
   if(cw*ch*dpr*dpr>budget) dpr=Math.max(1,Math.sqrt(budget/(cw*ch)));
   canvas.width=Math.max(1,Math.round(cw*dpr));
   canvas.height=Math.max(1,Math.round(ch*dpr));
@@ -170,44 +173,209 @@ function resize(){
   } else {
     LAY.mode="land"; LAY.LWc=1280; LAY.LHc=800; s=Math.min(aw/1280,ah/800);
   }
-  view={scale:s,ox:ins.l+(aw-LAY.LWc*s)/2,oy:ins.t+(ah-LAY.LHc*s)/2,dpr:dpr,cw:cw,ch:ch};
+  // Ox/Oy auf Device-Pixel snappen → scharfer Text/UI auf Retina
+  var ox=ins.l+(aw-LAY.LWc*s)/2, oy=ins.t+(ah-LAY.LHc*s)/2;
+  ox=Math.round(ox*dpr)/dpr; oy=Math.round(oy*dpr)/dpr;
+  view={scale:s,ox:ox,oy:oy,dpr:dpr,cw:cw,ch:ch};
   LAY.u=clamp((TOUCH_DEV?0.7:0.5)/s,1,1.55);
   layoutBoard();
 }
 window.addEventListener("resize",resize);
 window.addEventListener("orientationchange",function(){ setTimeout(resize,120); });
 
-/* ---- audio (Ava) ---- */
-var SND={ctx:null,out:null,buf:{},want:{},decoded:0,failed:0,unlocked:false,played:[]};
+/* ---- audio (Ava SFX + BEAK music) ---- */
+var SND={ctx:null,out:null,buf:{},want:{},decoded:0,failed:0,unlocked:false,played:[],flipN:0};
+var MUS={
+  on: lsGet(LS_MUSIC,"1")!=="0",
+  buf:{}, decoded:0, failed:0,
+  gain:null, src:null, track:null, want:null,
+  baseVol:0.20, duckVol:0.045, duckUntil:0,
+  paused:false, offset:0, startedAt:0,
+  toggled:0
+};
+function decodeB64Audio(b64, onOk, onFail){
+  try{
+    var bin=atob(b64), u8=new Uint8Array(bin.length);
+    for(var i=0;i<bin.length;i++) u8[i]=bin.charCodeAt(i);
+    // OfflineAudioContext dekodiert auch ohne Audiogerät / suspended (wichtig für WebKit)
+    var OC=window.OfflineAudioContext||window.webkitOfflineAudioContext;
+    var ctx=OC ? new OC(1, 1, 44100) : SND.ctx;
+    if(!ctx){ onFail(); return; }
+    var p=ctx.decodeAudioData(u8.buffer, onOk, onFail);
+    if(p&&p.catch) p.catch(onFail);
+  }catch(e){ onFail(); }
+}
 function sndInit(){
   if(SND.ctx) return;
   var AC=window.AudioContext||window.webkitAudioContext; if(!AC) return;
   try{ SND.ctx=new AC(); }catch(e){ SND.ctx=null; return; }
   SND.out=SND.ctx.createGain(); SND.out.gain.value=0.9; SND.out.connect(SND.ctx.destination);
+  MUS.gain=SND.ctx.createGain(); MUS.gain.gain.value=0; MUS.gain.connect(SND.ctx.destination);
+  SND._decodeStarted=false;
+}
+function startDecodeIfNeeded(){
+  if(!SND.ctx || SND._decodeStarted) return;
+  SND._decodeStarted=true;
   Object.keys(SND_SRC).forEach(function(name){
-    try{
-      var bin=atob(SND_SRC[name]), u8=new Uint8Array(bin.length);
-      for(var i=0;i<bin.length;i++) u8[i]=bin.charCodeAt(i);
-      var ok=function(b){ SND.buf[name]=b; SND.decoded++; if(SND.want[name]&&performance.now()-SND.want[name]<600){ delete SND.want[name]; sndStart(name); } };
-      var p=SND.ctx.decodeAudioData(u8.buffer,ok,function(){ SND.failed++; });
-      if(p&&p.catch) p.catch(function(){});
-    }catch(e){ SND.failed++; }
+    decodeB64Audio(SND_SRC[name],
+      function(b){ SND.buf[name]=b; SND.decoded++; if(SND.want[name]&&performance.now()-SND.want[name]<2000){ delete SND.want[name]; sndStart(name); } },
+      function(){ SND.failed++; });
+  });
+  Object.keys(MUS_SRC||{}).forEach(function(name){
+    decodeB64Audio(MUS_SRC[name],
+      function(b){
+        MUS.buf[name]=b; MUS.decoded++;
+        if(MUS.want===name){ MUS.want=null; musPlay(name, true); }
+        else if(SND.unlocked && MUS.on) musSync();
+      },
+      function(){ MUS.failed++; });
   });
 }
 function sndUnlock(){
   sndInit(); var c=SND.ctx; if(!c) return;
+  function go(){
+    // Unlock ZUERST — WebKit-Headless wirft bei src.start/resume oft InvalidStateError
+    SND.unlocked=true;
+    try{ startDecodeIfNeeded(); }catch(e){}
+    try{
+      if(c.state!=="running"&&c.resume){ var rr=c.resume(); if(rr&&rr.catch) rr.catch(function(){}); }
+    }catch(e){}
+    try{
+      var b=c.createBuffer(1,1,22050), src=c.createBufferSource(); src.buffer=b; src.connect(c.destination); src.start(0);
+    }catch(e){}
+    try{ musSync(); }catch(e){}
+  }
   try{
-    if(c.state!=="running"&&c.resume){ var r=c.resume(); if(r&&r.catch) r.catch(function(){}); }
-    if(!SND.unlocked){ var b=c.createBuffer(1,1,22050), src=c.createBufferSource(); src.buffer=b; src.connect(c.destination); src.start(0); SND.unlocked=true; }
-  }catch(e){}
+    if(c.state!=="running"&&c.resume){
+      var r=c.resume();
+      if(r&&r.then) r.then(function(){ go(); }).catch(function(){ go(); });
+      else go();
+    } else go();
+  }catch(e){ go(); }
 }
 ["keydown","pointerdown","touchend","mousedown","click"].forEach(function(ev){ window.addEventListener(ev,sndUnlock,true); });
 function sndStart(name){ try{ var src=SND.ctx.createBufferSource(); src.buffer=SND.buf[name]; src.connect(SND.out); src.start(0); }catch(e){} }
+function musDuck(ms){
+  MUS.duckUntil=performance.now()+(ms||700);
+  musApplyGain();
+  setTimeout(function(){ musApplyGain(); }, (ms||700)+40);
+}
 function playSnd(name){
   SND.played.push(name); if(SND.played.length>50) SND.played.shift();
+  musDuck(name==="los-gehts"?1100:750);
   if(!SND.ctx) return;
   if(SND.buf[name]) sndStart(name); else SND.want[name]=performance.now();
 }
+/** Leiser Karton-/Papier-Wisch + Tick bei ~90°; WebAudio, Zufallsvariation. Unabhängig vom Musik-Schalter. */
+function playFlipSnd(){
+  if(!SND.ctx||!SND.unlocked) return;
+  try{
+    var ctx=SND.ctx, dur=0.085+Math.random()*0.045, sr=ctx.sampleRate|0;
+    var n=Math.max(1, (sr*dur)|0), buf=ctx.createBuffer(1, n, sr), d=buf.getChannelData(0);
+    var pitch=0.88+Math.random()*0.28, vol=0.07+Math.random()*0.035;
+    var tickAt=(n*0.40)|0, i, t, env, noise, f, prev=0;
+    for(i=0;i<n;i++){
+      t=i/sr;
+      env = t<0.006 ? (t/0.006) : Math.exp(-3.4*(t-0.006)/Math.max(1e-4,dur-0.006));
+      noise=Math.random()*2-1;
+      prev=prev*0.82+noise*0.18; // soft LP
+      f=400*pitch+(160*pitch-400*pitch)*(i/(n-1));
+      d[i]=env*vol*(0.62*prev + 0.22*Math.sin(2*Math.PI*f*t));
+    }
+    for(i=0;i<(0.016*sr)|0;i++){
+      var j=tickAt+i; if(j<0||j>=n) continue;
+      var te=i/(0.016*sr), e=Math.sin(Math.PI*te);
+      d[j]+=0.28*vol*e*Math.sin(2*Math.PI*88*pitch*(i/sr));
+      d[j]+=0.08*vol*e*(Math.random()*2-1);
+    }
+    for(i=0;i<n;i++){ if(d[i]>0.9)d[i]=0.9; else if(d[i]<-0.9)d[i]=-0.9; }
+    var src=ctx.createBufferSource(); src.buffer=buf;
+    var g=ctx.createGain(); g.gain.value=1;
+    src.connect(g); g.connect(SND.out); src.start(0);
+    SND.flipN++;
+  }catch(e){}
+}
+function musApplyGain(){
+  if(!MUS.gain||!SND.ctx) return;
+  var now=SND.ctx.currentTime;
+  var silent=!MUS.on || MUS.paused || (typeof document!=="undefined" && document.hidden);
+  var duck=performance.now()<MUS.duckUntil;
+  var target=silent?0:(duck?MUS.duckVol:MUS.baseVol);
+  try{
+    MUS.gain.gain.cancelScheduledValues(now);
+    MUS.gain.gain.setTargetAtTime(target, now, 0.04);
+  }catch(e){ MUS.gain.gain.value=target; }
+}
+function musStopKeepOffset(){
+  if(MUS.src && MUS.track && MUS.buf[MUS.track] && SND.ctx){
+    var dur=MUS.buf[MUS.track].duration||1;
+    MUS.offset=((SND.ctx.currentTime-MUS.startedAt)+MUS.offset)%dur;
+    if(MUS.offset<0) MUS.offset=0;
+  }
+  if(MUS.src){
+    try{ MUS.src.onended=null; MUS.src.stop(0); }catch(e){}
+    MUS.src=null;
+  }
+}
+function musPlay(name, forceRestart){
+  if(!MUS.on||!SND.unlocked) return;
+  sndInit();
+  if(!SND.ctx||!MUS.gain) return;
+  if(!MUS.buf[name]){ MUS.want=name; return; }
+  if(!forceRestart && MUS.track===name && MUS.src && !MUS.paused) return;
+  var offset=(!forceRestart && MUS.track===name)?MUS.offset:0;
+  musStopKeepOffset();
+  if(forceRestart || MUS.track!==name){ offset=0; MUS.offset=0; }
+  MUS.paused=false; MUS.track=name;
+  try{
+    if(SND.ctx.state!=="running" && SND.ctx.resume){
+      try{ SND.ctx.resume(); }catch(e0){}
+    }
+    var src=SND.ctx.createBufferSource();
+    src.buffer=MUS.buf[name];
+    src.loop=true;
+    src.connect(MUS.gain);
+    src.start(0, offset%MUS.buf[name].duration);
+    MUS.src=src; MUS.startedAt=SND.ctx.currentTime; MUS.offset=offset;
+    musApplyGain();
+  }catch(e){ MUS.src=null; MUS.want=name; }
+}
+function musDesired(){
+  if(G.screen==="start"||G.screen==="info") return "titel";
+  if(G.screen==="game"||G.screen==="win"||G.screen==="pause") return "memory";
+  return "titel";
+}
+function musSync(){
+  if(!SND.unlocked) return;
+  if(SND.ctx && SND.ctx.state!=="running" && SND.ctx.resume){
+    try{ var r=SND.ctx.resume(); if(r&&r.then) r.then(function(){ startDecodeIfNeeded(); }); }catch(e){}
+  }
+  startDecodeIfNeeded();
+  var hide=(typeof document!=="undefined" && document.hidden);
+  var shouldPause=(G.screen==="pause")||hide;
+  if(!MUS.on){
+    musStopKeepOffset(); MUS.paused=true; musApplyGain(); return;
+  }
+  var want=musDesired();
+  if(shouldPause){
+    if(MUS.src) musStopKeepOffset();
+    MUS.paused=true; MUS.track=want; musApplyGain();
+    return;
+  }
+  if(MUS.paused || MUS.track!==want || !MUS.src){
+    musPlay(want, MUS.track!==want);
+  } else {
+    musApplyGain();
+  }
+}
+function musToggle(){
+  MUS.on=!MUS.on;
+  lsSet(LS_MUSIC, MUS.on?"1":"0");
+  MUS.toggled++;
+  if(!MUS.on){ musStopKeepOffset(); MUS.paused=true; musApplyGain(); }
+  else { MUS.offset=0; musSync(); }
+}
+document.addEventListener("visibilitychange", function(){ musSync(); });
 
 /* ---- game state ---- */
 var G={
@@ -300,6 +468,7 @@ function startLevel(idx){
   lsSet(LS_LEVEL, String(idx));
   layoutBoard();
   playSnd("los-gehts");
+  musSync();
 }
 
 function layoutBoard(){
@@ -313,6 +482,7 @@ function layoutBoard(){
     gap=10*u;
     LAY.logo={cx:Lw/2, y:10*u, h:26*u};
     LAY.pause={x:Lw-28*u, y:18*u, r:16*u};
+    LAY.music={x:LAY.pause.x-LAY.pause.r*2.7, y:LAY.pause.y, r:LAY.pause.r};
   } else {
     top=56;
     bottomBar=0;
@@ -320,6 +490,7 @@ function layoutBoard(){
     gap=12;
     LAY.logo={cx:Lw*0.72, y:18, h:32};
     LAY.pause={x:Lw-40, y:28, r:18};
+    LAY.music={x:LAY.pause.x-LAY.pause.r*2.7, y:LAY.pause.y, r:LAY.pause.r};
   }
   var availW=port ? (Lw-sidePad*2) : Math.min(720, Lw*0.55);
   var availH=port ? (Lh-top-bottomBar-8*u) : (Lh-top-40);
@@ -335,9 +506,10 @@ function layoutBoard(){
   if(fy<top) fy=top;
   var pad=port?10*u:14;
   G.field={
-    x:fx, y:fy, w:boardW, h:boardH,
-    card:size, gap:gap,
-    cardX:fx-pad, cardY:fy-pad, cardW:boardW+pad*2, cardH:boardH+pad*2
+    x:Math.round(fx), y:Math.round(fy), w:Math.round(boardW), h:Math.round(boardH),
+    card:Math.round(size), gap:gap,
+    cardX:Math.round(fx-pad), cardY:Math.round(fy-pad),
+    cardW:Math.round(boardW+pad*2), cardH:Math.round(boardH+pad*2)
   };
   // Portrait: HUD am unteren Bildschirmrand (nicht unter dem Spielfeld schwebend)
   G.hudY = port ? (Lh - bottomBar + 10*u) : (Lh-90);
@@ -347,9 +519,9 @@ function layoutBoard(){
   for(i=0;i<G.cards.length;i++){
     r=(i/cols)|0; c=i%cols;
     G.cardRects[i]={
-      x:fx+c*(size+gap),
-      y:fy+r*(size+gap),
-      w:size, h:size, i:i
+      x:Math.round(fx+c*(size+gap)),
+      y:Math.round(fy+r*(size+gap)),
+      w:Math.round(size), h:Math.round(size), i:i
     };
   }
 }
@@ -587,21 +759,31 @@ function drawCardFaceAt(c, x, y, w, h, card){
   }
 }
 function paintCardSide(c, x, y, w, h, card, front, matched){
-  var r=Math.max(5, w*0.12);
+  // Einheitlicher Rand per Inset-Fill (kein stroke — vermeidet Clipping/halbe Pixel)
+  var r=Math.max(6, Math.round(w*0.12));
+  var bw=2; // feste 2-Logikpixel-Rahmenstärke
   if(front){
-    c.fillStyle=WHITE;
-    rr(c, x, y, w, h, r); c.fill();
-    c.strokeStyle=matched?PINK:"rgba(80,80,80,0.22)";
-    c.lineWidth=matched?Math.max(2,w*0.035):1.5;
-    rr(c, x, y, w, h, r); c.stroke();
-    drawCardFaceAt(c, x, y, w, h, card);
+    if(matched){
+      c.fillStyle=PINK;
+      rr(c, x, y, w, h, r); c.fill();
+      c.fillStyle=WHITE;
+      rr(c, x+bw, y+bw, w-bw*2, h-bw*2, Math.max(2, r-bw)); c.fill();
+    } else {
+      // dezenter grauer 2px-Rahmen
+      c.fillStyle="rgba(80,80,80,0.28)";
+      rr(c, x, y, w, h, r); c.fill();
+      c.fillStyle=WHITE;
+      rr(c, x+bw, y+bw, w-bw*2, h-bw*2, Math.max(2, r-bw)); c.fill();
+    }
+    drawCardFaceAt(c, x+bw, y+bw, w-bw*2, h-bw*2, card);
   } else {
     c.fillStyle=CARD_BACK;
     rr(c, x, y, w, h, r); c.fill();
-    // leichte Innenkante
-    c.strokeStyle="rgba(255,255,255,0.18)";
-    c.lineWidth=1.5;
-    rr(c, x+2, y+2, w-4, h-4, Math.max(4,r-2)); c.stroke();
+    // einheitliche weiße Innenkante 2px (Inset)
+    c.fillStyle="rgba(255,255,255,0.22)";
+    rr(c, x+bw, y+bw, w-bw*2, h-bw*2, Math.max(2, r-bw)); c.fill();
+    c.fillStyle=CARD_BACK;
+    rr(c, x+bw*2, y+bw*2, w-bw*4, h-bw*4, Math.max(2, r-bw*2)); c.fill();
     drawBeakMark(c, x, y, w, h);
   }
 }
@@ -694,19 +876,26 @@ function drawCard3D(c, rect, card, selected){
   var leftH=h/2*(1+(scaleX>=0?k:-k));
   var rightH=h/2*(1+(scaleX>=0?-k:k));
 
-  var rCard=Math.max(5, rect.w*0.12);
-  if(!card.anim && absC>0.98){
-    // ruhend: gecachter weicher Schatten
+  var rCard=Math.max(6, Math.round(rect.w*0.12));
+  var showFront = ang >= 90;
+  // Ruhend: achsenparallel zeichnen (kein Clip/Scale) → scharfe einheitliche Ränder
+  if(!card.anim && absC>0.995){
     var sh=getRestShadow(rect.w, rect.h, rCard);
     var pad=(sh.width-rect.w)/2;
-    c.drawImage(sh, rect.x-pad, rect.y-pad+1);
-  } else {
-    drawSoftShadowTrapezoid(c, cx, cy, halfW, leftH, rightH, lift, sin);
+    c.drawImage(sh, Math.round(rect.x-pad), Math.round(rect.y-pad+1));
+    paintCardSide(c, rect.x, rect.y, rect.w, rect.h, card, showFront, !!card.matched);
+    if(selected){
+      c.save();
+      c.strokeStyle=WHITE; c.lineWidth=3;
+      rr(c, rect.x-3, rect.y-3, rect.w+6, rect.h+6, rCard+3); c.stroke();
+      c.restore();
+    }
+    return;
   }
 
-  var showFront = ang >= 90;
+  drawSoftShadowTrapezoid(c, cx, cy, halfW, leftH, rightH, lift, sin);
+
   if(absC < 0.035){
-    // Kante
     c.fillStyle=showFront?WHITE:CARD_BACK;
     c.fillRect(cx-1.5, cy-h*0.48, 3, h*0.96);
     return;
@@ -722,7 +911,6 @@ function drawCard3D(c, rect, card, selected){
   c.clip();
 
   c.translate(cx, cy);
-  // Nur positive Breite — Vorderseite nach 90° NICHT gespiegelt (kein scaleX<0)
   c.scale(absC*lift, lift);
   paintCardSide(c, -rect.w/2, -rect.h/2, rect.w, rect.h, card, showFront, !!card.matched);
   c.restore();
@@ -763,6 +951,8 @@ function cardFlipWidthRatio(card){
 function drawLogo(cx, y, beakH){
   var c=ctx;
   c.save();
+  c.shadowColor="transparent"; c.shadowBlur=0; c.shadowOffsetX=0; c.shadowOffsetY=0;
+  c.globalAlpha=1;
   c.textAlign="left"; c.textBaseline="alphabetic";
   c.fillStyle=WHITE;
   var beakSize=beakH*0.92;
@@ -813,6 +1003,7 @@ function beginFlip(idx, toFront){
   card.anim={toFront:!!toFront, t:0, dur:FLIP_DUR};
   delete card._forceAng;
   G.animating++;
+  playFlipSnd();
   return true;
 }
 function resolvePair(){
@@ -895,11 +1086,12 @@ function levelWon(){
   G.winT=0;
   // kein Extra-Sound: letztes Paar hat schon "prima"
   recordScore();
+  musSync();
 }
 
 function nextLevel(){
   var next=G.levelIdx+1;
-  if(next>=LEVELS.length){ G.screen="start"; return; }
+  if(next>=LEVELS.length){ G.screen="start"; musSync(); return; }
   startLevel(next);
 }
 
@@ -923,15 +1115,30 @@ function hitPause(L){
   var p=LAY.pause; if(!p) return false;
   return Math.hypot(L.x-p.x, L.y-p.y)<=p.r+6;
 }
+function hitMusic(L){
+  var m=LAY.music; if(!m) return false;
+  return Math.hypot(L.x-m.x, L.y-m.y)<=m.r+6;
+}
+function ensureMusicLayout(){
+  var Lw=LAY.LWc, u=LAY.u, port=LAY.mode==="port";
+  if(port){
+    if(!LAY.pause) LAY.pause={x:Lw-28*u, y:18*u, r:16*u};
+    LAY.music={x:LAY.pause.x-LAY.pause.r*2.7, y:LAY.pause.y, r:LAY.pause.r};
+  } else {
+    if(!LAY.pause) LAY.pause={x:Lw-40, y:28, r:18};
+    LAY.music={x:LAY.pause.x-LAY.pause.r*2.7, y:LAY.pause.y, r:LAY.pause.r};
+  }
+}
 
 function onTap(L){
+  if(hitMusic(L)){ musToggle(); return; }
   if(G.screen==="start"||G.screen==="win"||G.screen==="info"||G.screen==="pause"){
     var b=hitButton(L);
-    if(b&&b.act){ b.act(); return; }
+    if(b&&b.act){ b.act(); musSync(); return; }
     return;
   }
   if(G.screen==="game"){
-    if(hitPause(L)){ G.screen="pause"; G.running=false; return; }
+    if(hitPause(L)){ G.screen="pause"; G.running=false; musSync(); return; }
     var ci=hitCard(L);
     if(ci>=0){ G.focus=ci; flipCard(ci); }
   }
@@ -947,25 +1154,26 @@ document.addEventListener("touchmove", function(e){ e.preventDefault(); }, {pass
 
 window.addEventListener("keydown", function(e){
   var k=e.key;
+  if(k==="m"||k==="M"){ e.preventDefault(); musToggle(); return; }
   if(G.screen==="start"){
-    if(k==="Enter"||k===" "){ e.preventDefault(); startLevel(0); }
+    if(k==="Enter"||k===" "){ e.preventDefault(); startLevel(0); musSync(); }
     return;
   }
   if(G.screen==="win"){
-    if(k==="Enter"||k===" "){ e.preventDefault(); nextLevel(); }
-    if(k==="Escape"){ e.preventDefault(); G.screen="start"; }
+    if(k==="Enter"||k===" "){ e.preventDefault(); nextLevel(); musSync(); }
+    if(k==="Escape"){ e.preventDefault(); G.screen="start"; musSync(); }
     return;
   }
   if(G.screen==="pause"){
-    if(k==="Escape"||k==="Enter"||k===" "||k==="p"||k==="P"){ e.preventDefault(); G.screen="game"; G.running=true; G.startAt=performance.now()-G.elapsed; }
+    if(k==="Escape"||k==="Enter"||k===" "||k==="p"||k==="P"){ e.preventDefault(); G.screen="game"; G.running=true; G.startAt=performance.now()-G.elapsed; musSync(); }
     return;
   }
   if(G.screen==="info"){
-    if(k==="Escape"||k==="Enter"||k===" "){ e.preventDefault(); G.screen="start"; }
+    if(k==="Escape"||k==="Enter"||k===" "){ e.preventDefault(); G.screen="start"; musSync(); }
     return;
   }
   if(G.screen!=="game") return;
-  if(k==="Escape"||k==="p"||k==="P"){ e.preventDefault(); G.screen="pause"; G.running=false; return; }
+  if(k==="Escape"||k==="p"||k==="P"){ e.preventDefault(); G.screen="pause"; G.running=false; musSync(); return; }
   var cols=G.cols, n=G.cards.length;
   if(k==="ArrowLeft"){ e.preventDefault(); G.focus=(G.focus%cols===0)?G.focus+cols-1:G.focus-1; if(G.focus<0)G.focus=0; if(G.focus>=n)G.focus=n-1; }
   else if(k==="ArrowRight"){ e.preventDefault(); G.focus=(G.focus%cols===cols-1)?G.focus-cols+1:G.focus+1; if(G.focus>=n)G.focus=n-1; if(G.focus<0)G.focus=0; }
@@ -976,14 +1184,38 @@ window.addEventListener("keydown", function(e){
 
 /* ---- render ---- */
 function drawPauseBtn(){
-  var p=LAY.pause, c=ctx;
+  var p=LAY.pause, c=ctx; if(!p) return;
   c.save();
-  c.fillStyle="rgba(255,255,255,0.25)";
-  c.beginPath(); c.arc(p.x,p.y,p.r,0,Math.PI*2); c.fill();
+  // Kein halbtransparentes Fill (wirkte auf iOS milchig/blur-artig)
+  c.shadowColor="transparent"; c.shadowBlur=0;
+  c.globalAlpha=1;
+  c.strokeStyle=WHITE; c.lineWidth=Math.max(2, p.r*0.12);
+  c.beginPath(); c.arc(p.x, p.y, p.r, 0, Math.PI*2); c.stroke();
   c.fillStyle=WHITE;
-  var bw=p.r*0.22, bh=p.r*0.9;
-  c.fillRect(p.x-bw*1.6, p.y-bh/2, bw, bh);
-  c.fillRect(p.x+bw*0.6, p.y-bh/2, bw, bh);
+  var bw=Math.max(2, p.r*0.22), bh=Math.max(8, p.r*0.9);
+  c.fillRect(Math.round(p.x-bw*1.6), Math.round(p.y-bh/2), Math.round(bw), Math.round(bh));
+  c.fillRect(Math.round(p.x+bw*0.6), Math.round(p.y-bh/2), Math.round(bw), Math.round(bh));
+  c.restore();
+}
+function drawMusicBtn(){
+  ensureMusicLayout();
+  var m=LAY.music, c=ctx; if(!m) return;
+  c.save();
+  c.shadowColor="transparent"; c.shadowBlur=0; c.globalAlpha=1;
+  c.strokeStyle=WHITE; c.lineWidth=Math.max(2, m.r*0.12);
+  c.beginPath(); c.arc(m.x, m.y, m.r, 0, Math.PI*2); c.stroke();
+  // Note-Symbol (Achtelnote)
+  var s=m.r*0.55;
+  c.fillStyle=WHITE; c.strokeStyle=WHITE; c.lineWidth=Math.max(2, m.r*0.14); c.lineCap="round";
+  var nx=m.x-s*0.15, ny=m.y+s*0.15;
+  c.beginPath(); c.ellipse(nx, ny+s*0.35, s*0.28, s*0.20, -0.5, 0, Math.PI*2); c.fill();
+  c.beginPath(); c.moveTo(nx+s*0.26, ny+s*0.35); c.lineTo(nx+s*0.26, ny-s*0.55); c.stroke();
+  c.beginPath(); c.moveTo(nx+s*0.26, ny-s*0.55); c.quadraticCurveTo(nx+s*0.7, ny-s*0.35, nx+s*0.55, ny-s*0.05); c.stroke();
+  if(!MUS.on){
+    // durchstreichen
+    c.strokeStyle=WHITE; c.lineWidth=Math.max(2, m.r*0.16);
+    c.beginPath(); c.moveTo(m.x-s*0.7, m.y+s*0.7); c.lineTo(m.x+s*0.7, m.y-s*0.7); c.stroke();
+  }
   c.restore();
 }
 
@@ -1045,9 +1277,8 @@ function drawFeedback(){
 
 function drawGame(){
   var c=ctx, Lw=LAY.LWc, Lh=LAY.LHc;
+  c.shadowColor="transparent"; c.shadowBlur=0; c.globalAlpha=1;
   c.fillStyle=PINK; c.fillRect(0,0,Lw,Lh);
-  drawLogo(LAY.logo.cx, LAY.logo.y, LAY.logo.h);
-  drawPauseBtn();
   // white playfield card
   if(G.field){
     c.fillStyle=WHITE;
@@ -1057,6 +1288,11 @@ function drawGame(){
     drawCard(c, G.cardRects[i], G.cards[i], G.focus===i && !TOUCH_DEV);
   }
   drawStatusBar();
+  // Header zuletzt + scharf (kein Overlay darunter)
+  c.shadowColor="transparent"; c.shadowBlur=0; c.globalAlpha=1;
+  drawLogo(LAY.logo.cx, LAY.logo.y, LAY.logo.h);
+  drawMusicBtn();
+  drawPauseBtn();
   drawFeedback();
 }
 
@@ -1081,6 +1317,8 @@ function paintBtn(b, primary){
 function drawStart(){
   var c=ctx, Lw=LAY.LWc, Lh=LAY.LHc, port=LAY.mode==="port";
   c.fillStyle=PINK; c.fillRect(0,0,Lw,Lh);
+  ensureMusicLayout();
+  drawMusicBtn();
   drawLogo(Lw/2, Lh*(port?0.12:0.14), port?34:56);
   c.fillStyle=WHITE; c.globalAlpha=0.85;
   c.font=(port?15:18)+"px NunitoLI"; c.textAlign="center";
@@ -1120,11 +1358,11 @@ function drawWin(){
   var bw=Math.min(260, Lw*0.65), bh=48;
   var label=G.levelIdx+1>=LEVELS.length?"menü":"weiter";
   var b1=btn(label, Lw/2-bw/2, Lh*0.55, bw, bh, function(){
-    if(G.levelIdx+1>=LEVELS.length) G.screen="start";
+    if(G.levelIdx+1>=LEVELS.length){ G.screen="start"; musSync(); }
     else nextLevel();
   });
   paintBtn(b1, true);
-  var b2=btn("menü", Lw/2-bw/2, Lh*0.55+bh+14, bw, 40, function(){ G.screen="start"; });
+  var b2=btn("menü", Lw/2-bw/2, Lh*0.55+bh+14, bw, 40, function(){ G.screen="start"; musSync(); });
   paintBtn(b2, false);
   c.globalAlpha=0.7; c.font="14px NunitoLI"; c.fillText(CREDIT+"  ·  "+VERSION, Lw/2, Lh*0.88);
   c.globalAlpha=1;
@@ -1141,15 +1379,16 @@ function drawPause(){
   c.globalAlpha=1;
   G.buttons=[];
   var bw=Math.min(240, Lw*0.6), bh=48;
-  var b1=btn("weiter", Lw/2-bw/2, Lh*0.56, bw, bh, function(){ G.screen="game"; G.running=true; G.startAt=performance.now()-G.elapsed; });
+  var b1=btn("weiter", Lw/2-bw/2, Lh*0.56, bw, bh, function(){ G.screen="game"; G.running=true; G.startAt=performance.now()-G.elapsed; musSync(); });
   paintBtn(b1, true);
-  var b2=btn("menü", Lw/2-bw/2, Lh*0.56+bh+14, bw, 40, function(){ G.screen="start"; });
+  var b2=btn("menü", Lw/2-bw/2, Lh*0.56+bh+14, bw, 40, function(){ G.screen="start"; musSync(); });
   paintBtn(b2, false);
 }
 
 function drawInfo(){
   var c=ctx, Lw=LAY.LWc, Lh=LAY.LHc, port=LAY.mode==="port";
   c.fillStyle=PINK; c.fillRect(0,0,Lw,Lh);
+  ensureMusicLayout(); drawMusicBtn();
   drawLogo(Lw/2, Lh*0.08, port?28:40);
   c.fillStyle=WHITE; c.textAlign="center";
   c.font="22px NunitoSB"; c.fillText("info", Lw/2, Lh*0.22);
@@ -1173,7 +1412,7 @@ function drawInfo(){
   c.globalAlpha=1;
   G.buttons=[];
   var bw=Math.min(220, Lw*0.55), bh=44;
-  var b1=btn("zurück", Lw/2-bw/2, Lh*0.86, bw, bh, function(){ G.screen="start"; });
+  var b1=btn("zurück", Lw/2-bw/2, Lh*0.86, bw, bh, function(){ G.screen="start"; musSync(); });
   paintBtn(b1, true);
 }
 
@@ -1228,7 +1467,8 @@ function clearCardFlipAngle(idx){
 
 window.MEMORY = {
   VERSION:VERSION, CREDIT:CREDIT, G:G, LEVELS:LEVELS, MOTIFS:MOTIFS, PART_IDS:PART_IDS,
-  LS_BEST:LS_BEST, LS_TOP:LS_TOP, SND:SND, playSnd:playSnd, HS_ON:HS_ON, OHS:OHS,
+  LS_BEST:LS_BEST, LS_TOP:LS_TOP, LS_MUSIC:LS_MUSIC, SND:SND, MUS:MUS, playSnd:playSnd, playFlipSnd:playFlipSnd,
+  musToggle:musToggle, musSync:musSync, musPlay:musPlay, HS_ON:HS_ON, OHS:OHS,
   startLevel:startLevel, flipCard:flipCard, forceWin:forceWin, revealAll:revealAll,
   beginFlip:beginFlip, setCardFlipAngle:setCardFlipAngle, clearCardFlipAngle:clearCardFlipAngle, FLIP_DUR:FLIP_DUR, cardAngle:cardAngle, cardFlipWidthRatio:cardFlipWidthRatio,
   nextLevel:nextLevel, buildDeck:buildDeck, layoutBoard:layoutBoard, updateCardAnims:updateCardAnims,

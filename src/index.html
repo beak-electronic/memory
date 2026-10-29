@@ -5,9 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<!-- Wie Geräte Laufzettel: default (nicht black-translucent) → kein iOS-Statusbar-Blur über dem Inhalt -->
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Memory">
 <meta name="theme-color" content="#dd007a">
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#dd007a">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#dd007a">
 <meta name="format-detection" content="telephone=no">
 <title>BEAK Memory</title>
 __HEAD__<style>
@@ -15,8 +18,24 @@ __CSS__
 </style>
 </head>
 <body>
+<script>
+(function(){
+  try{
+    var standalone = window.navigator.standalone===true
+      || window.matchMedia('(display-mode: standalone)').matches
+      || window.matchMedia('(display-mode: window-controls-overlay)').matches;
+    if(standalone) document.documentElement.setAttribute('data-standalone','1');
+    // Opake Pink-Chrome für iOS Statusleiste (WebKit liest theme-color + html/body bg)
+    var root=document.documentElement, body=document.body;
+    root.style.backgroundColor='#dd007a';
+    if(body) body.style.backgroundColor='#dd007a';
+  }catch(e){}
+})();
+</script>
 <canvas id="game" tabindex="0"></canvas>
 <div id="safe" aria-hidden="true"></div>
+<!-- Wie Geräte Laufzettel: fester opaker Streifen → WebKit-Scroll-Pocket-Blur aus -->
+<div class="ios-pwa-status-strip" aria-hidden="true"></div>
 <script>
 __JS__
 </script>

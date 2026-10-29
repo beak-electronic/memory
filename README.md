@@ -1,4 +1,4 @@
-# BEAK Memory V1.04
+# BEAK Memory V1.06
 
 Ein-Datei HTML/Canvas-Minispiel (Schwester von BEAK Breakout / Leiterbahn-Puzzle / Lötkolben-Tetris).
 
@@ -9,6 +9,8 @@ python3 build.py                 # → index.html (fonts+audio inline)
 python3 build.py --pages         # + Manifest/Icon-Links
 PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS=1 node tests/playwright.test.js
 ```
+
+Nicht deployen / kein Remote in diesem Auftrag.
 
 ## Sounds (Ava)
 
