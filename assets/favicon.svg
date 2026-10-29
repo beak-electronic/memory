@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- BEAK Memory. Entwurf 3. Rounded r=22%, simplified. #dd007a, white 2x2 cards -->
+  <rect width="512" height="512" rx="112.64" ry="112.64" fill="#dd007a"/>
+  <g>
+    <rect x="88.0" y="64.2" width="159.0" height="182.8" rx="20" fill="#ffffff"/>
+    <path d="M125.5 155.6 L139.5 155.6 L149.5 133.6 L163.5 177.6 L177.5 133.6 L191.5 177.6 L201.5 155.6 L215.5 155.6" fill="none" stroke="#dd007a" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="265.0" y="64.2" width="159.0" height="182.8" rx="20" fill="#ffffff"/>
+    <circle cx="344.5" cy="155.6" r="28" fill="#dd007a"/>
+    <rect x="88.0" y="265.0" width="159.0" height="182.8" rx="20" fill="#ffffff"/>
+    <circle cx="167.5" cy="356.4" r="28" fill="#dd007a"/>
+    <rect x="265.0" y="265.0" width="159.0" height="182.8" rx="20" fill="#ffffff"/>
+    <circle cx="344.5" cy="356.4" r="28" fill="#dd007a"/>
+  </g>
+</svg>

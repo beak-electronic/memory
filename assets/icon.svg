@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- BEAK Memory App-Icon. Entwurf 3: 2x2 grid, one resistor face, three BEAK dots -->
+  <rect width="512" height="512" rx="112.64" ry="112.64" fill="#dd007a"/>
+  <rect x="78.0" y="61.39999999999998" width="166.0" height="182.60000000000002" rx="16" fill="#ffffff"/>
+  <path d="M116.4 152.7 L131.2 152.7 L142.4 132.9 L157.3 172.5 L172.2 132.9 L187.0 172.5 L197.0 152.7 L209.4 152.7" fill="none" stroke="#dd007a" stroke-width="8.1" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="268.0" y="61.39999999999998" width="166.0" height="182.60000000000002" rx="16" fill="#ffffff"/>
+  <circle cx="351.0" cy="152.7" r="26" fill="#dd007a"/>
+  <rect x="78.0" y="268.0" width="166.0" height="182.60000000000002" rx="16" fill="#ffffff"/>
+  <circle cx="161.0" cy="359.3" r="26" fill="#dd007a"/>
+  <rect x="268.0" y="268.0" width="166.0" height="182.60000000000002" rx="16" fill="#ffffff"/>
+  <circle cx="351.0" cy="359.3" r="26" fill="#dd007a"/>
+</svg>

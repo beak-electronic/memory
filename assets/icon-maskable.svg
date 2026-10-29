@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- BEAK Memory. Entwurf 3. Full-bleed maskable (motif ~80% safe zone). #dd007a, white 2x2 cards -->
+  <rect width="512" height="512" fill="#dd007a"/>
+  <g transform="translate(256 256) scale(0.8) translate(-256 -256)">
+    <rect x="88.0" y="64.2" width="159.0" height="182.8" rx="20" fill="#ffffff"/>
+    <path d="M129.0 155.6 L140.0 155.6 L148.2 140.2 L159.2 171.0 L170.2 140.2 L181.2 171.0 L189.5 155.6 L200.5 155.6" fill="none" stroke="#dd007a" stroke-width="6.1" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="265.0" y="64.2" width="159.0" height="182.8" rx="20" fill="#ffffff"/>
+    <circle cx="344.5" cy="155.6" r="22" fill="#dd007a"/>
+    <rect x="88.0" y="265.0" width="159.0" height="182.8" rx="20" fill="#ffffff"/>
+    <circle cx="167.5" cy="356.4" r="22" fill="#dd007a"/>
+    <rect x="265.0" y="265.0" width="159.0" height="182.8" rx="20" fill="#ffffff"/>
+    <circle cx="344.5" cy="356.4" r="22" fill="#dd007a"/>
+  </g>
+</svg>
