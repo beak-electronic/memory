@@ -1,6 +1,6 @@
 (function(){
 "use strict";
-var VERSION = "V1.06";
+var VERSION = "V1.08";
 var PINK = "#dd007a", WHITE = "#ffffff", GREY = "#505050", LIGHT = "#b4b4b4", CARD_BACK = "#dd007a";
 var CREDIT = "Soundeffekte: Ava (2)";
 var FLIP_DUR = 0.40; // s, 3D-Kartendrehung
@@ -191,7 +191,9 @@ var MUS={
   gain:null, src:null, track:null, want:null,
   baseVol:0.20, duckVol:0.045, duckUntil:0,
   paused:false, offset:0, startedAt:0,
-  toggled:0
+  toggled:0,
+  fadeSec:2.6, // sanftes Einfaden Menü-/Levelmusik
+  needFade:true
 };
 function decodeB64Audio(b64, onOk, onFail){
   try{
@@ -235,6 +237,7 @@ function sndUnlock(){
   sndInit(); var c=SND.ctx; if(!c) return;
   function go(){
     // Unlock ZUERST — WebKit-Headless wirft bei src.start/resume oft InvalidStateError
+    var first=!SND.unlocked;
     SND.unlocked=true;
     try{ startDecodeIfNeeded(); }catch(e){}
     try{
@@ -243,7 +246,10 @@ function sndUnlock(){
     try{
       var b=c.createBuffer(1,1,22050), src=c.createBufferSource(); src.buffer=b; src.connect(c.destination); src.start(0);
     }catch(e){}
-    try{ musSync(); }catch(e){}
+    try{
+      if(first) MUS.needFade=true;
+      musSync();
+    }catch(e){}
   }
   try{
     if(c.state!=="running"&&c.resume){
@@ -253,7 +259,30 @@ function sndUnlock(){
     } else go();
   }catch(e){ go(); }
 }
-["keydown","pointerdown","touchend","mousedown","click"].forEach(function(ev){ window.addEventListener(ev,sndUnlock,true); });
+["keydown","pointerdown","pointerup","touchstart","touchend","mousedown","click"].forEach(function(ev){
+  window.addEventListener(ev,sndUnlock,true);
+});
+/** Sofort versuchen: Desktop erlaubt oft Autoplay; iOS blockiert still → Unlock bei erster Geste mit Fade-in. */
+function tryAutoplayMusic(){
+  try{
+    sndInit();
+    var c=SND.ctx; if(!c||!MUS.on) return;
+    function go(){
+      try{
+        SND.unlocked=true;
+        startDecodeIfNeeded();
+        MUS.needFade=true;
+        musSync();
+      }catch(e){}
+    }
+    if(c.state!=="running"&&c.resume){
+      var r=c.resume();
+      if(r&&r.then) r.then(go).catch(function(){ /* Autoplay blockiert — kein console.error */ });
+      else go();
+    } else go();
+  }catch(e){}
+}
+try{ tryAutoplayMusic(); }catch(e){}
 function sndStart(name){ try{ var src=SND.ctx.createBufferSource(); src.buffer=SND.buf[name]; src.connect(SND.out); src.start(0); }catch(e){} }
 function musDuck(ms){
   MUS.duckUntil=performance.now()+(ms||700);
@@ -295,16 +324,24 @@ function playFlipSnd(){
     SND.flipN++;
   }catch(e){}
 }
-function musApplyGain(){
+function musApplyGain(opts){
   if(!MUS.gain||!SND.ctx) return;
   var now=SND.ctx.currentTime;
   var silent=!MUS.on || MUS.paused || (typeof document!=="undefined" && document.hidden);
   var duck=performance.now()<MUS.duckUntil;
   var target=silent?0:(duck?MUS.duckVol:MUS.baseVol);
+  var fade=opts&&opts.fade && MUS.needFade && target>0 && !duck;
   try{
     MUS.gain.gain.cancelScheduledValues(now);
-    MUS.gain.gain.setTargetAtTime(target, now, 0.04);
-  }catch(e){ MUS.gain.gain.value=target; }
+    if(fade){
+      var cur=MUS.gain.gain.value; if(!(cur>=0)) cur=0;
+      MUS.gain.gain.setValueAtTime(Math.min(cur, 0.001), now);
+      MUS.gain.gain.linearRampToValueAtTime(target, now+MUS.fadeSec);
+      MUS.needFade=false;
+    } else {
+      MUS.gain.gain.setTargetAtTime(target, now, 0.04);
+    }
+  }catch(e){ try{ MUS.gain.gain.value=target; }catch(e2){} }
 }
 function musStopKeepOffset(){
   if(MUS.src && MUS.track && MUS.buf[MUS.track] && SND.ctx){
@@ -337,7 +374,7 @@ function musPlay(name, forceRestart){
     src.connect(MUS.gain);
     src.start(0, offset%MUS.buf[name].duration);
     MUS.src=src; MUS.startedAt=SND.ctx.currentTime; MUS.offset=offset;
-    musApplyGain();
+    musApplyGain({fade: !!forceRestart || offset===0});
   }catch(e){ MUS.src=null; MUS.want=name; }
 }
 function musDesired(){
@@ -363,6 +400,7 @@ function musSync(){
     return;
   }
   if(MUS.paused || MUS.track!==want || !MUS.src){
+    if(MUS.track!==want) MUS.needFade=true;
     musPlay(want, MUS.track!==want);
   } else {
     musApplyGain();
@@ -480,8 +518,8 @@ function layoutBoard(){
     bottomBar=108*u; // Platz für Stats + Credit + Version (+ safe-area via view insets)
     sidePad=14*u;
     gap=10*u;
-    LAY.logo={cx:Lw/2, y:10*u, h:26*u};
-    LAY.pause={x:Lw-28*u, y:18*u, r:16*u};
+    LAY.logo={cx:Lw/2, y:12*u, h:26*u};
+    LAY.pause={x:Lw-28*u, y:20*u, r:16*u};
     LAY.music={x:LAY.pause.x-LAY.pause.r*2.7, y:LAY.pause.y, r:LAY.pause.r};
   } else {
     top=56;
@@ -975,7 +1013,7 @@ function drawLogo(cx, y, beakH){
   for(i=0;i<letters.length;i++){ c.fillText(letters[i], x, baseline); x+=widths[i]+gap; }
   c.beginPath(); c.arc(x+dotR, baseline-beakSize*0.28, dotR, 0, Math.PI*2); c.fill();
   x+=dotR*2+gapLogo;
-  c.font=subSize+"px NunitoLI"; c.globalAlpha=0.55; c.fillStyle=WHITE;
+  c.font=subSize+"px NunitoLI"; c.globalAlpha=1; c.fillStyle=WHITE;
   for(i=0;i<sub.length;i++){ c.fillText(sub[i], x, baseline); x+=c.measureText(sub[i]).width+track; }
   c.globalAlpha=1;
   c.restore();
@@ -1122,7 +1160,7 @@ function hitMusic(L){
 function ensureMusicLayout(){
   var Lw=LAY.LWc, u=LAY.u, port=LAY.mode==="port";
   if(port){
-    if(!LAY.pause) LAY.pause={x:Lw-28*u, y:18*u, r:16*u};
+    if(!LAY.pause) LAY.pause={x:Lw-28*u, y:20*u, r:16*u};
     LAY.music={x:LAY.pause.x-LAY.pause.r*2.7, y:LAY.pause.y, r:LAY.pause.r};
   } else {
     if(!LAY.pause) LAY.pause={x:Lw-40, y:28, r:18};

@@ -5,12 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<!-- Wie Geräte Laufzettel: default (nicht black-translucent) → kein iOS-Statusbar-Blur über dem Inhalt -->
+<!-- Standalone wie Geräte Laufzettel: default (nicht black-translucent) -->
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Memory">
 <meta name="theme-color" content="#dd007a">
 <meta name="theme-color" media="(prefers-color-scheme: light)" content="#dd007a">
 <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#dd007a">
+<meta name="color-scheme" content="light">
 <meta name="format-detection" content="telephone=no">
 <title>BEAK Memory</title>
 __HEAD__<style>
@@ -25,16 +26,31 @@ __CSS__
       || window.matchMedia('(display-mode: standalone)').matches
       || window.matchMedia('(display-mode: window-controls-overlay)').matches;
     if(standalone) document.documentElement.setAttribute('data-standalone','1');
-    // Opake Pink-Chrome für iOS Statusleiste (WebKit liest theme-color + html/body bg)
     var root=document.documentElement, body=document.body;
     root.style.backgroundColor='#dd007a';
-    if(body) body.style.backgroundColor='#dd007a';
+    root.style.colorScheme='light';
+    if(body){ body.style.backgroundColor='#dd007a'; body.style.colorScheme='light'; }
+    // theme-color frisch setzen (iOS PWA cached Metas sonst)
+    var head=document.head;
+    var old=head.querySelectorAll('meta[name="theme-color"]');
+    for(var i=0;i<old.length;i++) old[i].parentNode.removeChild(old[i]);
+    function addMeta(c, media){
+      var m=document.createElement('meta');
+      m.setAttribute('name','theme-color');
+      m.setAttribute('content',c);
+      if(media) m.setAttribute('media', media);
+      head.insertBefore(m, head.firstChild);
+    }
+    addMeta('#dd007a');
+    addMeta('#dd007a','(prefers-color-scheme: light)');
+    addMeta('#dd007a','(prefers-color-scheme: dark)');
   }catch(e){}
 })();
 </script>
 <canvas id="game" tabindex="0"></canvas>
 <div id="safe" aria-hidden="true"></div>
-<!-- Wie Geräte Laufzettel: fester opaker Streifen → WebKit-Scroll-Pocket-Blur aus -->
+<!-- Opaker Pink-Streifen = Safe-Area (wie Laufzettel-Topbar-Chrome). Inhalt darunter. -->
+<div id="top-chrome" class="top-chrome" aria-hidden="true"></div>
 <div class="ios-pwa-status-strip" aria-hidden="true"></div>
 <script>
 __JS__

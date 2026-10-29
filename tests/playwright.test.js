@@ -82,7 +82,7 @@ async function runCore(browserType, label, base) {
     };
   });
   // SND_SRC is inside IIFE — check via played after actions instead
-  ok(meta.ver === 'V1.06', `${label}: version V1.06 (${meta.ver})`);
+  ok(meta.ver === 'V1.08', `${label}: version V1.08 (${meta.ver})`);
   ok(meta.title === 'BEAK Memory', `${label}: title BEAK Memory (${meta.title})`);
   ok(!meta.kidsBtn, `${label}: no kids menu button`);
   ok(meta.levels === 10 && meta.first === 'level01', `${label}: 10 levels starting level01`);
@@ -597,6 +597,131 @@ async function runV106Shots(base) {
   console.log('v106 screenshots written');
 }
 
+
+async function runV107Shots(base) {
+  const browser = await pw.chromium.launch({ headless: true });
+  const ctx = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    deviceScaleFactor: 3,
+    hasTouch: true,
+    isMobile: true
+  });
+  const page = await ctx.newPage();
+  await page.goto(base + '/index.html');
+  // Simulate iPhone standalone + safe-area (Liquid Glass zone)
+  await page.evaluate(() => {
+    document.documentElement.setAttribute('data-standalone', '1');
+    const st = document.createElement('style');
+    st.textContent = `:root{--safe-top:47px !important;--chrome-extra:22px !important;}` +
+      `#safe{padding-top:calc(47px + 22px) !important;}` +
+      `.top-chrome{height:calc(47px + 22px) !important;}` +
+      `.ios-pwa-status-strip{display:block !important;height:47px !important;}`;
+    document.head.appendChild(st);
+    window.dispatchEvent(new Event('resize'));
+  });
+  await page.waitForTimeout(200);
+  await page.evaluate(() => { try { MEMORY.G.screen='start'; } catch(e) {} });
+  // force resize after CSS
+  await page.evaluate(() => { window.dispatchEvent(new Event('resize')); });
+  await page.waitForTimeout(200);
+  await page.screenshot({ path: path.join(MOCK, 'v107-iphone-header.png'), clip: { x: 0, y: 0, width: 390, height: 160 } });
+
+  // chrome present
+  const chrome = await page.evaluate(() => {
+    const el = document.getElementById('top-chrome');
+    const cs = el && getComputedStyle(el);
+    const safe = document.getElementById('safe');
+    const scs = safe && getComputedStyle(safe);
+    return {
+      hasChrome: !!el,
+      chromeH: cs ? cs.height : null,
+      safePad: scs ? scs.paddingTop : null,
+      standalone: document.documentElement.getAttribute('data-standalone'),
+      statusBar: document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]').content,
+      ver: MEMORY.VERSION,
+      fadeSec: MEMORY.MUS.fadeSec
+    };
+  });
+  ok(chrome.hasChrome && !!chrome.ver, `v107: top-chrome + version (${JSON.stringify(chrome)})`);
+  ok(chrome.statusBar === 'default', `v107: status-bar default`);
+  ok(chrome.fadeSec >= 2, `v107: music fade ~2.6s (${chrome.fadeSec})`);
+
+  // music fade-in: gain starts low and ramps (no ducking)
+  await page.mouse.click(200, 400);
+  await page.evaluate(async () => {
+    try { if (MEMORY.SND.ctx) await MEMORY.SND.ctx.resume(); } catch (e) {}
+    MEMORY.G.screen = 'start';
+    MEMORY.MUS.duckUntil = 0;
+    MEMORY.MUS.needFade = true;
+    if (!MEMORY.MUS.buf.titel && MEMORY.SND.ctx) {
+      const b = MEMORY.SND.ctx.createBuffer(1, MEMORY.SND.ctx.sampleRate * 2, MEMORY.SND.ctx.sampleRate);
+      MEMORY.MUS.buf.titel = b; MEMORY.MUS.buf.memory = b; MEMORY.MUS.decoded = 2;
+    }
+    MEMORY.musPlay('titel', true);
+  });
+  await page.waitForTimeout(50);
+  const fade = await page.evaluate(() => {
+    const g = MEMORY.MUS.gain && MEMORY.MUS.gain.gain.value;
+    return { track: MEMORY.MUS.track, gain: g, needFade: MEMORY.MUS.needFade, base: MEMORY.MUS.baseVol };
+  });
+  ok(fade.track === 'titel' && fade.gain < fade.base * 0.5, `v107: fade-in starts below base (${JSON.stringify(fade)})`);
+
+  await browser.close();
+  // also webkit header shot
+  const wb = await pw.webkit.launch({ headless: true });
+  const wctx = await wb.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, hasTouch: true, isMobile: true });
+  const wp = await wctx.newPage();
+  await wp.goto(base + '/index.html');
+  await wp.evaluate(() => {
+    document.documentElement.setAttribute('data-standalone', '1');
+    const st = document.createElement('style');
+    st.textContent = `:root{--safe-top:47px !important;--chrome-extra:22px !important;}` +
+      `#safe{padding-top:calc(47px + 22px) !important;}.top-chrome{height:calc(47px + 22px) !important;}` +
+      `.ios-pwa-status-strip{display:block !important;height:47px !important;}`;
+    document.head.appendChild(st);
+    window.dispatchEvent(new Event('resize'));
+  });
+  await wp.waitForTimeout(250);
+  await wp.evaluate(() => MEMORY.startLevel(0));
+  await wp.waitForTimeout(200);
+  await wp.screenshot({ path: path.join(MOCK, 'v107-webkit-header.png'), clip: { x: 0, y: 0, width: 390, height: 160 } });
+  await wb.close();
+  console.log('v107 screenshots written');
+}
+
+
+async function runV108Shots(base) {
+  const browser = await pw.chromium.launch({ headless: true });
+  // iPhone header DPR3
+  const ctx = await browser.newContext({ viewport:{width:390,height:844}, deviceScaleFactor:3, hasTouch:true, isMobile:true });
+  const page = await ctx.newPage();
+  await page.goto(base+'/index.html');
+  await page.waitForTimeout(400);
+  await page.evaluate(() => MEMORY.startLevel(0));
+  await page.waitForTimeout(200);
+  await page.screenshot({ path: path.join(MOCK,'v108-iphone-header.png'), clip:{x:0,y:0,width:390,height:120} });
+  // verify subtitle alpha via pixel near "memory" text — just check VERSION
+  const ver = await page.evaluate(() => MEMORY.VERSION);
+  ok(ver === 'V1.08', `v108: version (${ver})`);
+  await browser.close();
+  // desktop start
+  const b2 = await pw.chromium.launch({ headless: true });
+  const c2 = await b2.newContext({ viewport:{width:1280,height:800} });
+  const p2 = await c2.newPage();
+  await p2.goto(base+'/index.html');
+  await p2.waitForTimeout(500);
+  await p2.screenshot({ path: path.join(MOCK,'v108-desktop-start.png') });
+  await b2.close();
+  // webkit smoke version
+  const wb = await pw.webkit.launch({ headless: true });
+  const wp = await (await wb.newContext({ viewport:{width:390,height:844} })).newPage();
+  await wp.goto(base+'/index.html');
+  await wp.waitForTimeout(300);
+  ok((await wp.evaluate(() => MEMORY.VERSION)) === 'V1.08', 'v108 webkit version');
+  await wb.close();
+  console.log('v108 screenshots written');
+}
+
 (async () => {
   const { execSync } = require('child_process');
   execSync('python3 build.py --pages', { cwd: ROOT, stdio: 'inherit' });
@@ -611,6 +736,8 @@ async function runV106Shots(base) {
   await runIphone(pw.webkit, 'webkit', base);
   await runV105Shots(base);
   await runV106Shots(base);
+  await runV107Shots(base);
+  await runV108Shots(base);
 
   srv.close();
   console.log(fails ? `\n${fails} FAILED` : '\nALL PASSED');

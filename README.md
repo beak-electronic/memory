@@ -1,4 +1,4 @@
-# BEAK Memory V1.06
+# BEAK Memory V1.08
 
 Ein-Datei HTML/Canvas-Minispiel (Schwester von BEAK Breakout / Leiterbahn-Puzzle / Lötkolben-Tetris).
 
